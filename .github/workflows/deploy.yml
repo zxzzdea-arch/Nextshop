@@ -1,0 +1,55 @@
+name: Deploy NEXTSHOP
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unzip and build site
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+        run: |
+          set -euo pipefail
+          rm -rf _work _site && mkdir -p _work _site
+          ZIP=$(ls -1 nextshop*.zip 2>/dev/null | sort | tail -n 1 || true)
+          [ -z "$ZIP" ] && ZIP=$(ls -1 *.zip 2>/dev/null | sort | tail -n 1 || true)
+          if [ -n "$ZIP" ]; then
+            unzip -q -o "$ZIP" -d _work
+          else
+            rsync -a --exclude .git --exclude _work --exclude _site ./ _work/
+          fi
+          INDEX=$(find _work -name index.html | grep -v '/node_modules/' | awk '{ print length, $0 }' | sort -n | head -n 1 | cut -d' ' -f2-)
+          [ -z "$INDEX" ] && { echo "::error::index.html not found"; exit 1; }
+          cp -r "$(dirname "$INDEX")"/. _site/
+          rm -rf _site/.github _site/*.sql _site/*.zip
+          if [ -n "${SUPABASE_URL}" ] && [ -n "${SUPABASE_ANON_KEY}" ]; then
+            echo "window.SHOP_CONFIG = $(jq -n --arg u "$SUPABASE_URL" --arg k "$SUPABASE_ANON_KEY" '{SUPABASE_URL:$u, SUPABASE_ANON_KEY:$k}');" > _site/config.js
+          else
+            echo "::warning::Set SUPABASE_URL and SUPABASE_ANON_KEY in Settings > Secrets and variables > Actions > Variables"
+          fi
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
